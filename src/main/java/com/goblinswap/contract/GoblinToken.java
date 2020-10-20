@@ -6,9 +6,7 @@ import io.nuls.contract.sdk.annotation.Required;
 import io.nuls.contract.sdk.annotation.View;
 
 import java.math.BigInteger;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.Map;
+import java.util.*;
 
 import static io.nuls.contract.sdk.Utils.emit;
 import static io.nuls.contract.sdk.Utils.require;
@@ -18,13 +16,14 @@ public class GoblinToken extends Ownable implements Contract, Token {
     private final String name;
     private final String symbol;
     private final int decimals;
-    private BigInteger totalSupply = BigInteger.ONE;
+    private BigInteger totalSupply = BigInteger.ZERO;
 
     private Map<Address, BigInteger> balances = new HashMap<Address, BigInteger>();
     private Map<Address, Map<Address, BigInteger>> allowed = new HashMap<Address, Map<Address, BigInteger>>();
-    private Map<Address,Boolean> allowedContracts = new HashMap<Address, Boolean>();
 
     private Map<Address,Map<Long,BigInteger>> lockedBalances=new HashMap<Address,Map<Long,BigInteger>>();
+    private Set<Address> lockedAccounts = new HashSet<Address>();
+    private Set<Address> allowedContracts = new HashSet<Address>();
     /**
      * token跨链系统处理合约
      */
@@ -54,11 +53,13 @@ public class GoblinToken extends Ownable implements Contract, Token {
         return totalSupply;
     }
 
-    public GoblinToken(@Required String name, @Required String symbol, @Required int decimals) {
+    public GoblinToken(@Required String name, @Required String symbol, @Required BigInteger initialAmount, @Required int decimals) {
         this.name = name;
         this.symbol = symbol;
         this.decimals = decimals;
-
+        totalSupply = initialAmount.multiply(BigInteger.TEN.pow(decimals));
+        balances.put(Msg.sender(), totalSupply);
+        emit(new TransferEvent(null, Msg.sender(), totalSupply));
     }
 
     @Override
@@ -143,6 +144,7 @@ public class GoblinToken extends Ownable implements Contract, Token {
 
     @Override
     public boolean transfer(@Required Address to, @Required BigInteger value) {
+
         subtractBalance(Msg.sender(), value);
         addBalance(to, value);
         emit(new TransferEvent(Msg.sender(), to, value));
@@ -275,6 +277,7 @@ public class GoblinToken extends Ownable implements Contract, Token {
     }
 
     private void subtractBalance(Address address, BigInteger value) {
+        onlyAvailableAccount(address);
         //先检查锁定的Token是否可用
         updateLockedBalance(address);
 
@@ -366,22 +369,39 @@ public class GoblinToken extends Ownable implements Contract, Token {
     }
 
 
-    public void addAllowedContract(Address address){
+    public void addAllowedContract(Address contractAddress){
         onlyOwner();
-        require(address != null, "address can't be null");
-        allowedContracts.put(address,true);
+        require(contractAddress.isContract());
+        allowedContracts.add(contractAddress);
     }
 
-    public void removeAllowedContract(Address address){
+    public void removeAllowedContract(Address contractAddress){
         onlyOwner();
-        require(address != null, "address can't be null");
-        allowedContracts.put(address,false);
+        require(contractAddress.isContract());
+        allowedContracts.remove(contractAddress);
+    }
+
+
+    public void lockAccount(@Required Address address) {
+        onlyOwner();
+        onlyAvailableAccount(address);
+        lockedAccounts.add(address);
+    }
+
+    private void onlyAvailableAccount(Address address) {
+        require(!lockedAccounts.contains(address), "The account ["+address.toString()+"] is locked.");
+    }
+
+    public void unlockAccount(@Required Address address) {
+        onlyOwner();
+        require(lockedAccounts.contains(address), "This account is not locked.");
+        lockedAccounts.remove(address);
     }
 
     public void mint(Address account, BigInteger amount) {
-        if(Msg.sender().equals(owner) || (allowedContracts.get(Msg.sender())!=null && allowedContracts.get(Msg.sender()))){
-            require(account != null, "account can't be null");
-            require(amount!=null && amount.compareTo(BigInteger.ZERO)>0);
+        if(Msg.sender().equals(owner) || (allowedContracts.contains(Msg.sender()))){
+            onlyAvailableAccount(account);
+            require( amount.compareTo(BigInteger.ZERO)>0);
             totalSupply = totalSupply.add(amount);
             if (balances.get(account) != null) {
                 balances.put(account, balances.get(account).add(amount));
@@ -393,22 +413,6 @@ public class GoblinToken extends Ownable implements Contract, Token {
 
     }
 
-
-    public void burn(BigInteger amount) {
-        onlyOwner();
-        require(amount.compareTo(BigInteger.ZERO)>0);
-        require(totalSupply.compareTo(amount)>0);
-
-        if (balances.get(Msg.sender()) != null) {
-            if (balances.get(Msg.sender()).compareTo(amount) >= 0) {
-                balances.put(Msg.sender(), balances.get(Msg.sender()).subtract(amount));
-            } else {
-                balances.put(Msg.sender(), BigInteger.ZERO);
-            }
-            totalSupply = totalSupply.subtract(amount);
-            emit(new TransferEvent(Msg.sender(), null, amount));
-        }
-    }
 
 
 }
